@@ -1,46 +1,36 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
+# 导入必要的模块和库
 from typing import Optional, Tuple
-
 import torch
 import torch.nn as nn
 from fairseq.modules import FairseqDropout, LayerDropModuleList, LayerNorm
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
-
 from .multihead_attention import MultiheadAttention
 from .graphormer_layers import GraphNodeFeature, GraphAttnBias
 from .graphormer_graph_encoder_layer import GraphormerGraphEncoderLayer
-
 
 def init_graphormer_params(module):
     """
     Initialize the weights specific to the Graphormer Model.
     """
-
+    # 根据不同类型的模块进行参数初始化
     def normal_(data):
-        # with FSDP, module params will be on CUDA, so we cast them back to CPU
-        # so that the RNG is consistent with and without FSDP
         data.copy_(data.cpu().normal_(mean=0.0, std=0.02).to(data.device))
 
     if isinstance(module, nn.Linear):
+        # 线性层参数初始化
         normal_(module.weight.data)
         if module.bias is not None:
             module.bias.data.zero_()
     if isinstance(module, nn.Embedding):
+        # 嵌入层参数初始化
         normal_(module.weight.data)
         if module.padding_idx is not None:
             module.weight.data[module.padding_idx].zero_()
     if isinstance(module, MultiheadAttention):
+        # 自注意力层参数初始化
         normal_(module.q_proj.weight.data)
         normal_(module.k_proj.weight.data)
         normal_(module.v_proj.weight.data)
-
 
 class GraphormerGraphEncoder(nn.Module):
     def __init__(
@@ -83,6 +73,7 @@ class GraphormerGraphEncoder(nn.Module):
         self.apply_graphormer_init = apply_graphormer_init
         self.traceable = traceable
 
+        # 构建节点特征编码层
         self.graph_node_feature = GraphNodeFeature(
             num_heads=num_attention_heads,
             num_atoms=num_atoms,
@@ -92,6 +83,7 @@ class GraphormerGraphEncoder(nn.Module):
             n_layers=num_encoder_layers,
         )
 
+        # 构建自注意力偏置编码层
         self.graph_attn_bias = GraphAttnBias(
             num_heads=num_attention_heads,
             num_atoms=num_atoms,
@@ -107,6 +99,7 @@ class GraphormerGraphEncoder(nn.Module):
         self.embed_scale = embed_scale
 
         if q_noise > 0:
+            # 应用量化噪声
             self.quant_noise = apply_quant_noise_(
                 nn.Linear(self.embedding_dim, self.embedding_dim, bias=False),
                 q_noise,
@@ -116,17 +109,22 @@ class GraphormerGraphEncoder(nn.Module):
             self.quant_noise = None
 
         if encoder_normalize_before:
+            # LayerNorm是否在编码层之前
             self.emb_layer_norm = LayerNorm(self.embedding_dim, export=export)
         else:
             self.emb_layer_norm = None
 
         if pre_layernorm:
+            # 是否在前馈层之前使用LayerNorm
             self.final_layer_norm = LayerNorm(self.embedding_dim, export=export)
 
         if self.layerdrop > 0.0:
+            # 如果设置了layerdrop，使用LayerDropModuleList
             self.layers = LayerDropModuleList(p=self.layerdrop)
         else:
             self.layers = nn.ModuleList([])
+
+        # 构建多层Graphormer图编码器
         self.layers.extend(
             [
                 self.build_graphormer_graph_encoder_layer(
@@ -146,7 +144,7 @@ class GraphormerGraphEncoder(nn.Module):
             ]
         )
 
-        # Apply initialization of model params after building the model
+        # 在构建模型之后应用模型参数初始化
         if self.apply_graphormer_init:
             self.apply(init_graphormer_params)
 
@@ -159,6 +157,7 @@ class GraphormerGraphEncoder(nn.Module):
             raise NotImplementedError("Freezing embeddings is not implemented yet.")
 
         for layer in range(n_trans_layers_to_freeze):
+            # 冻结指定数量的编码层的参数
             freeze_module_params(self.layers[layer])
 
     def build_graphormer_graph_encoder_layer(
@@ -175,6 +174,7 @@ class GraphormerGraphEncoder(nn.Module):
         qn_block_size,
         pre_layernorm,
     ):
+        # 构建Graphormer图编码器层
         return GraphormerGraphEncoderLayer(
             embedding_dim=embedding_dim,
             ffn_embedding_dim=ffn_embedding_dim,
@@ -198,7 +198,7 @@ class GraphormerGraphEncoder(nn.Module):
         attn_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         is_tpu = False
-        # compute padding mask. This is needed for multi-head attention
+        # 计算填充掩码，这对于多头注意力是必要的
         data_x = batched_data["x"]
         n_graph, n_node = data_x.size()[:2]
         padding_mask = (data_x[:, :, 0]).eq(0)  # B x T x 1
@@ -209,13 +209,14 @@ class GraphormerGraphEncoder(nn.Module):
         # B x (T+1) x 1
 
         if token_embeddings is not None:
+            # 如果提供了预训练的token嵌入，使用该嵌入
             x = token_embeddings
         else:
+            # 否则，使用节点特征编码层进行特征嵌入
             x = self.graph_node_feature(batched_data)
 
         if perturb is not None:
-            #ic(torch.mean(torch.abs(x[:, 1, :])))
-            #ic(torch.mean(torch.abs(perturb)))
+            # 如果提供了扰动，应用扰动到嵌入特征上
             x[:, 1:, :] += perturb
 
         # x: B x T x C
@@ -223,26 +224,28 @@ class GraphormerGraphEncoder(nn.Module):
         attn_bias = self.graph_attn_bias(batched_data)
 
         if self.embed_scale is not None:
+            # 应用嵌入特征的缩放因子
             x = x * self.embed_scale
 
         if self.quant_noise is not None:
+            # 应用量化噪声
             x = self.quant_noise(x)
 
         if self.emb_layer_norm is not None:
+            # 应用嵌入特征的LayerNorm
             x = self.emb_layer_norm(x)
 
         x = self.dropout_module(x)
 
-        # account for padding while computing the representation
-
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+        # 考虑填充掩码，计算表示
+        x = x.transpose(0, 1)  # B x T x C -> T x B x C
 
         inner_states = []
         if not last_state_only:
             inner_states.append(x)
 
         for layer in self.layers:
+            # 逐层进行图编码器计算
             x, _ = layer(
                 x,
                 self_attn_padding_mask=padding_mask,

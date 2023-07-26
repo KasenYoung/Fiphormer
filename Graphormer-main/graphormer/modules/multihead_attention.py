@@ -1,20 +1,10 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
 import math
 from typing import Optional, Tuple
-
 import torch
 from fairseq import utils
 from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.quant_noise import quant_noise
 from torch import Tensor, nn
-
 
 class MultiheadAttention(nn.Module):
     """Multi-headed attention.
@@ -36,7 +26,7 @@ class MultiheadAttention(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
-        self.kdim = kdim if kdim is not None else embed_dim
+        self.kdim = kdim if kdim is not None else embed_dim  #k,v的默认值设定为d
         self.vdim = vdim if vdim is not None else embed_dim
         self.qkv_same_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
@@ -59,9 +49,10 @@ class MultiheadAttention(nn.Module):
             "Self-attention requires query, key and " "value to be of the same size"
         )
 
+        # Linear projections for queries, keys, and values
         self.k_proj = quant_noise(
             nn.Linear(self.kdim, embed_dim, bias=bias), q_noise, qn_block_size
-        )
+        ) 
         self.v_proj = quant_noise(
             nn.Linear(self.vdim, embed_dim, bias=bias), q_noise, qn_block_size
         )
@@ -69,6 +60,7 @@ class MultiheadAttention(nn.Module):
             nn.Linear(embed_dim, embed_dim, bias=bias), q_noise, qn_block_size
         )
 
+        # Linear projection for output
         self.out_proj = quant_noise(
             nn.Linear(embed_dim, embed_dim, bias=bias), q_noise, qn_block_size
         )
@@ -82,9 +74,8 @@ class MultiheadAttention(nn.Module):
 
     def reset_parameters(self):
         if self.qkv_same_dim:
-            # Empirically observed the convergence to be much better with
-            # the scaled initialization
-            nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))
+            # Empirically observed the convergence to be much better with the scaled initialization
+            nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))  #xavier_uniform:参数初始化
             nn.init.xavier_uniform_(self.v_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.q_proj.weight, gain=1 / math.sqrt(2))
         else:
@@ -111,19 +102,25 @@ class MultiheadAttention(nn.Module):
         """Input shape: Time x Batch x Channel
 
         Args:
-            key_padding_mask (ByteTensor, optional): mask to exclude
-                keys that are pads, of shape `(batch, src_len)`, where
-                padding elements are indicated by 1s.
-            need_weights (bool, optional): return the attention weights,
-                averaged over heads (default: False).
-            attn_mask (ByteTensor, optional): typically used to
-                implement causal attention, where the mask prevents the
-                attention from looking forward in time (default: None).
-            before_softmax (bool, optional): return the raw attention
-                weights and values before the attention softmax.
-            need_head_weights (bool, optional): return the attention
-                weights for each head. Implies *need_weights*. Default:
-                return the average attention weights over all heads.
+            query (Tensor): The input query of shape `(tgt_len, bsz, embed_dim)`.
+            key (Tensor, optional): The key tensor with shape `(src_len, bsz, kdim)`.
+            value (Tensor, optional): The value tensor with shape `(src_len, bsz, vdim)`.
+            attn_bias (Tensor, optional): Bias to be added to the attention scores.
+            key_padding_mask (ByteTensor, optional): Mask to exclude keys that are pads,
+                with shape `(bsz, src_len)`, where padding elements are indicated by 1s.
+            need_weights (bool, optional): Whether to return the attention weights,
+                averaged over heads (default: True).
+            attn_mask (ByteTensor, optional): Mask to implement causal attention,
+                preventing attention from looking forward in time (default: None).
+            before_softmax (bool, optional): Whether to return the raw attention
+                weights and values before the attention softmax (default: False).
+            need_head_weights (bool, optional): Whether to return the attention
+                weights for each head. Implies *need_weights*. Default: return the average
+                attention weights over all heads.
+
+        Returns:
+            A tuple containing the attention output tensor with shape `(tgt_len, bsz, embed_dim)`
+            and the attention weights tensor with shape `(bsz, num_heads, tgt_len, src_len)`.
         """
         if need_head_weights:
             need_weights = True
@@ -144,6 +141,7 @@ class MultiheadAttention(nn.Module):
         v = self.v_proj(query)
         q *= self.scaling
 
+        # Reshape queries, keys, and values for multi-head attention
         q = (
             q.contiguous()
             .view(tgt_len, bsz * self.num_heads, self.head_dim)
@@ -165,14 +163,15 @@ class MultiheadAttention(nn.Module):
         assert k is not None
         assert k.size(1) == src_len
 
-        # This is part of a workaround to get around fork/join parallelism
-        # not supporting Optional types.
+        # Workaround to handle fork/join parallelism not supporting Optional types
         if key_padding_mask is not None and key_padding_mask.dim() == 0:
             key_padding_mask = None
 
         if key_padding_mask is not None:
             assert key_padding_mask.size(0) == bsz
             assert key_padding_mask.size(1) == src_len
+
+        # Compute attention scores
         attn_weights = torch.bmm(q, k.transpose(1, 2))
         attn_weights = self.apply_sparse_mask(attn_weights, tgt_len, src_len, bsz)
 
@@ -186,7 +185,7 @@ class MultiheadAttention(nn.Module):
             attn_weights += attn_mask
 
         if key_padding_mask is not None:
-            # don't attend to padding symbols
+            # Mask padding symbols
             attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
             attn_weights = attn_weights.masked_fill(
                 key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool),
@@ -197,6 +196,7 @@ class MultiheadAttention(nn.Module):
         if before_softmax:
             return attn_weights, v
 
+        # Apply softmax and dropout to compute attention probabilities
         attn_weights_float = utils.softmax(
             attn_weights, dim=-1, onnx_trace=self.onnx_trace
         )
@@ -204,6 +204,7 @@ class MultiheadAttention(nn.Module):
         attn_probs = self.dropout_module(attn_weights)
 
         assert v is not None
+        # Compute attention output using weighted sum of values
         attn = torch.bmm(attn_probs, v)
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
@@ -216,7 +217,7 @@ class MultiheadAttention(nn.Module):
                 bsz, self.num_heads, tgt_len, src_len
             ).transpose(1, 0)
             if not need_head_weights:
-                # average attention weights over heads
+                # Average attention weights over heads
                 attn_weights = attn_weights.mean(dim=0)
 
         return attn, attn_weights
