@@ -7,16 +7,17 @@ from torch.utils.data import DataLoader,Dataset
 
 #define dataset
 class GraphDataset(Dataset):
-    def __init__(self,path,interval): 
+    def __init__(self,path,interval,test_rate=0.2,train=True):
         '''
         path:the path where the 'pt' files are stored.
         interval:time interval.
         '''
         super().__init__()
         self.path=path
+        self.test_rate=test_rate
         if not interval:
             raise RuntimeError('Given interval cannot be equal to 0!')
-        
+        self.train=train
         self.interval=interval
         file_ls=[]
         for file in os.listdir(self.path):
@@ -25,17 +26,27 @@ class GraphDataset(Dataset):
             print('The number of graphs is not divisible by interval.Could you have more appropiate intervals? ')
         self.left=len(file_ls)%self.interval
         self.nums=len(file_ls)//self.interval
-        sample_ls=file_ls[self.left:] #drop the first some files.
+        self.test_num=int(self.nums*self.test_rate)
+        self.train_num=self.nums-self.test_num
+
+        if self.train:
+            sample_ls=file_ls[self.left:self.left+self.train_num*interval] #drop the first some files.
+        else:
+            sample_ls=file_ls[self.left+(self.train_num)*interval:]
         self.sample_ls=sample_ls
         self.data_ls = self.partition()
+
+
 
     def partition(self):
 
         return [self.sample_ls[i:i+self.interval] for i in range(0,len(self.sample_ls),self.interval)]
 
     def __len__(self):
-        return self.nums
-    
+        if self.train:
+            return self.train_num
+        else:
+            return  self.test_num
     def __getitem__(self,index):
         #self.data_ls=self.partition(self.sample_ls,self.interval) #partition the sample_ls
         curr_pack=self.data_ls[index] # the current list of file names
