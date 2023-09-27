@@ -84,7 +84,7 @@ class GraphDataset(Dataset):
 if __name__ == '__main__':
     #you can try to use GraphDataset here.
     dataset=GraphDataset(path='graphs',interval=5)  #path:can be absolute path or relative path.Make sure this file is in the same directory as the 'graphs' directory.
-    dataloader=DataLoader(dataset=dataset,batch_size=2,shuffle=True)
+    dataloader=DataLoader(dataset=dataset,batch_size=5,shuffle=True)
     print(len(dataloader)) #total files/(batch_size*interval)
     for data in dataloader:
         print(data[0].shape,data[1].shape,data[2].shape,data[3].shape)

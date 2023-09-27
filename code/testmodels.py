@@ -198,14 +198,18 @@ def compute_lstmloss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
     loss=loss/interval
     return loss
 
-def training(trainloader, adj, model, loss_fn, optimizer, epoches, N, interval, hidden_dim, batch_size,str='rnn'):
+def training(trainloader, adj, model, loss_fn, optimizer, epoches, N, interval, hidden_dim, str='rnn'):
     # h_t=torch.zeros(batch_size,N,hidden_dim)
     model.train()
+    num=0
+    batch_size=0
     for epoch in range(epoches):
         loss_train= torch.tensor(0.0)
         for batch in trainloader:
-
+     
             X = batch[0].float()  # node_feature
+            batch_size=X.shape[0]
+            num+=batch_size
             Y = batch[3].float()  # label
             X=X.permute(1,0,2,3)
             norm=nn.BatchNorm2d(num_features=batch_size,eps=1e-5)
@@ -223,21 +227,24 @@ def training(trainloader, adj, model, loss_fn, optimizer, epoches, N, interval, 
             optimizer.step()
             loss_train += loss.item()
         #if epoch==1 or epoch%10==0:
-        print('The {} th epoch loss is: {},the average loss for each graph is {}.'.format(epoch, loss_train,loss_train/(batch_size*len(trainloader))))
+        print('The {} th epoch loss is: {},the average loss for each graph is {}.'.format(epoch, loss_train,loss_train/num))
         '''
             for name, parms in model.named_parameters():
                 print('-->name:', name, '-->grad_requirs:', parms.requires_grad,
                       ' -->grad_value:', parms.grad)
         '''
 
-def test(testloader, adj, model, loss_fn,  N, interval, hidden_dim, batch_size,str='rnn'):
+def test(testloader, adj, model, loss_fn,  N, interval, hidden_dim,str='rnn'):
     # h_t=torch.zeros(batch_size,N,hidden_dim)
     model.eval()
-
-    loss_train= torch.tensor(0.0)
+    num=0
+    batch_size=0
+    loss_test= torch.tensor(0.0)
     for batch in testloader:
 
         X = batch[0].float()  # node_feature
+        batch_size=X.shape[0]
+        num+=batch_size
         Y = batch[3].float()  #
         X=X.permute(1,0,2,3)
         norm=nn.BatchNorm2d(num_features=batch_size,eps=1e-5)
@@ -250,9 +257,9 @@ def test(testloader, adj, model, loss_fn,  N, interval, hidden_dim, batch_size,s
             loss = compute_lstmloss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
         # print(loss)
 
-        loss_train += loss.item()
+        loss_test += loss.item()
         #if epoch==1 or epoch%10==0:
-        print('Testing: The total loss is: {},the average loss for each graph is {}.'.format(loss_train,loss_train/(batch_size)))
+    print('Testing: The total loss is: {},the average loss for each graph is {}.'.format(loss_test,loss_test/num))
     '''
             for name, parms in model.named_parameters():
                 print('-->name:', name, '-->grad_requirs:', parms.requires_grad,
@@ -276,7 +283,7 @@ if __name__ == '__main__':
     model = SimpleModel(input_dim=26, hidden_dim=16, output_dim=1, alpha=2, dropout=0.2, act_func=nn.ReLU(),
                         concat=True)
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    training(trainloader=trainloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16, batch_size=4,
-             interval=5, optimizer=optimizer, epoches=10,str='rnn')
-    test(testloader=testloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16, batch_size=4,
+    training(trainloader=trainloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16, 
+             interval=5, optimizer=optimizer, epoches=20,str='rnn')
+    test(testloader=testloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16,
              interval=5,  str='rnn')

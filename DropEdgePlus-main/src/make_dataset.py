@@ -185,6 +185,7 @@ def get_dataset_and_split_planetoid(dataset, data_path, _log):
     idx_test = test_idx_range.tolist()
     idx_train = list(range(len(y)))
     idx_val = list(range(len(y), len(y) + 500))
+    
 
     return adj, features, labels, idx_train, idx_val, idx_test
 
