@@ -39,7 +39,8 @@ class GraphAttentionLayer(nn.Module):
         attention = F.dropout(attention, self.dropout, training=self.training)
 
         h_prime = torch.matmul(attention, Wh)
-        # print(h_prime.shape)
+        
+        #print(h_prime.shape)
         if self.concat:
             return F.elu(h_prime)
         else:
@@ -53,6 +54,8 @@ class GraphAttentionLayer(nn.Module):
         all_combine_matrix = torch.cat([Wh_repeated_in_chunks, Wh_repeated_alternating], dim=2)
 
         return all_combine_matrix.view(-1, N, N, 2 * self.out_features)
+    
+
 
 class TemporalLayer(nn.Module):
     def __init__(self,input_dim,hidden_dim,output_dim,act_func=nn.ReLU()) :
@@ -106,7 +109,7 @@ class LSTMLayer(nn.Module):
         return output,h_t,c_t
 
 class JustALayer(nn.Module):
-    def __init__(self,input_dim,hidden_dim,output_dim,act_func=nn.ReLU()) :
+    def __init__(self,hidden_dim,output_dim,act_func=nn.ReLU()) :
         super().__init__()
         self.hidden_dim=hidden_dim
         self.out_dim=output_dim
@@ -123,7 +126,23 @@ class JustALayer(nn.Module):
         output = self.act_func(self.out_proj(h_new))
         return output,h_new
 
-
+class MLP(nn.Module):
+    def __init__(self,in_features,out_features,dropout=0.2) :
+        super().__init__()
+        self.l1=nn.Linear(in_features=in_features,out_features=2*in_features,bias=True)
+        self.l2=nn.Linear(in_features=2*in_features,out_features=out_features,bias=True)
+        
+        self.activation=nn.ReLU()
+        self.dropout=nn.Dropout(p=dropout)
+    def forward(self,x):
+        #x=x.view(-1,18*26)
+        x=self.l1(x)
+        #print(x.shape)
+        x=self.dropout(self.activation(x))
+        x=self.l2(x)
+        
+        return x
+    
 
 class SimpleModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, alpha=2, dropout=0.2, act_func=nn.ReLU(), concat=True):
@@ -142,6 +161,7 @@ class SimpleModel(nn.Module):
 
     def forward(self, x, adj, h):  # x:N*d, adj:N*N,h:N*h
         x_hidden = self.graph_conv(x, adj)
+        #print(x_hidden.shape)
         output, h_new = self.temporal_layer(x, x_hidden, h)
         # print('reaches here!')
 
@@ -169,6 +189,28 @@ class SimpleLSTMModel(nn.Module):
         # print('reaches here!')
 
         return output, h_t,c_t
+    
+
+class SimpleMLPModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, alpha=2, dropout=0.2, act_func=nn.ReLU(), concat=True):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.alpha = alpha
+        self.dropout = dropout
+        self.act_func = act_func
+        self.concat = concat
+        self.graph_conv = MLP(in_features=input_dim,out_features=hidden_dim,dropout=dropout)
+        self.temporal_layer = TemporalLayer(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim,
+                                            act_func=self.act_func)
+
+    def forward(self, x, adj, h):  # x:N*d, adj:N*N,h:N*h
+        x_hidden = self.graph_conv(x)
+        output, h_new = self.temporal_layer(x, x_hidden, h)
+        # print('reaches here!')
+
+        return output, h_new
 
 
 def compute_loss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
@@ -184,6 +226,21 @@ def compute_loss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
     loss=loss/interval
     return loss
 
+def compute_singleloss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
+    loss=torch.tensor(0.0)
+    h_t=torch.zeros(batch_size,N,hidden_dim)
+    cnt=0
+    for x,y  in zip(torch.split(X,1,dim=1),torch.split(Y,1,dim=1)):
+        x=x.squeeze(1)
+        y=y.squeeze(1)
+        out_t,h_t=model(x,adj,h_t)
+        cnt+=1
+        if cnt==interval:
+            loss=loss_fn(out_t,y)
+
+    #loss=loss/interval
+    return loss
+
 def compute_lstmloss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
     loss=torch.tensor(0.0)
     h_t=torch.zeros(batch_size,N,hidden_dim)
@@ -197,6 +254,7 @@ def compute_lstmloss(adj,model,loss_fn,X,Y,N,interval,hidden_dim,batch_size):
 
     loss=loss/interval
     return loss
+
 
 def training(trainloader, adj, model, loss_fn, optimizer, epoches, N, interval, hidden_dim, str='rnn'):
     # h_t=torch.zeros(batch_size,N,hidden_dim)
@@ -219,7 +277,7 @@ def training(trainloader, adj, model, loss_fn, optimizer, epoches, N, interval, 
                 loss = compute_loss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
             elif str=='lstm':
                 loss = compute_lstmloss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
-            # print(loss)
+          
             optimizer.zero_grad()
             #torch.autograd.set_detect_anomaly(True)
             loss.backward()
@@ -252,7 +310,7 @@ def test(testloader, adj, model, loss_fn,  N, interval, hidden_dim,str='rnn'):
         X = X.permute(1, 0, 2, 3)
         
         if str=='rnn':
-            loss = compute_loss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
+            loss = compute_singleloss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
         elif str=='lstm':
             loss = compute_lstmloss(adj, model, loss_fn, X, Y, N, interval, hidden_dim, batch_size)
         # print(loss)
@@ -280,6 +338,8 @@ if __name__ == '__main__':
     testset = GraphDataset(path='./', interval=5, train=False,test_rate=0.2)
     trainloader = DataLoader(dataset=trainset, batch_size=4, shuffle=True)
     testloader = DataLoader(dataset=testset, batch_size=4, shuffle=True)
+    
+    print('GAT:')
     model = SimpleModel(input_dim=26, hidden_dim=16, output_dim=1, alpha=2, dropout=0.2, act_func=nn.ReLU(),
                         concat=True)
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
@@ -287,3 +347,15 @@ if __name__ == '__main__':
              interval=5, optimizer=optimizer, epoches=20,str='rnn')
     test(testloader=testloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16,
              interval=5,  str='rnn')
+    print('-----------------------------------------------------------------------')
+    
+    print("MLP:")
+    model = SimpleMLPModel(input_dim=26, hidden_dim=16, output_dim=1, alpha=2, dropout=0.2, act_func=nn.ReLU(),
+                        concat=True)
+    optimizer = optim.AdamW(model.parameters(), lr=0.001)
+    training(trainloader=trainloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16, 
+             interval=5, optimizer=optimizer, epoches=20,str='rnn')
+    test(testloader=testloader, adj=adj, model=model, loss_fn=loss_fn, N=18, hidden_dim=16,
+             interval=5,  str='rnn')
+    
+    
